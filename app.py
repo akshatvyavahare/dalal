@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timezone, timedelta
-import requests
+import requests, json
 
 st.set_page_config(page_title="Dalal Terminal", page_icon="◈",
                    layout="wide", initial_sidebar_state="collapsed")
@@ -225,6 +225,75 @@ def sv(v,pre="₹",dec=2,fmt=None):
 def ud(pct): return ("▲","#16a34a") if pct>=0 else ("▼","#dc2626")
 def sc(pct): return "pos" if pct>=0 else "neg"
 
+def calc_technicals(df):
+    """Compute technical indicators from OHLCV dataframe."""
+    if df.empty or "Close" not in df.columns:
+        return {}
+    c = df["Close"].astype(float)
+    t = {}
+    # Moving averages
+    if len(c) >= 20:  t["MA20"] = round(float(c.rolling(20).mean().iloc[-1]), 2)
+    if len(c) >= 50:  t["MA50"] = round(float(c.rolling(50).mean().iloc[-1]), 2)
+    if len(c) >= 200: t["MA200"]= round(float(c.rolling(200).mean().iloc[-1]), 2)
+    # RSI
+    if len(c) >= 15:
+        delta = c.diff()
+        gain  = delta.clip(lower=0).rolling(14).mean()
+        loss  = (-delta.clip(upper=0)).rolling(14).mean()
+        rs    = gain / loss.replace(0, float("nan"))
+        rsi   = 100 - (100 / (1 + rs))
+        t["RSI14"] = round(float(rsi.iloc[-1]), 1)
+    # MACD
+    if len(c) >= 26:
+        ema12 = c.ewm(span=12, adjust=False).mean()
+        ema26 = c.ewm(span=26, adjust=False).mean()
+        macd  = ema12 - ema26
+        signal= macd.ewm(span=9, adjust=False).mean()
+        t["MACD"]       = round(float(macd.iloc[-1]), 2)
+        t["MACD_Signal"]= round(float(signal.iloc[-1]), 2)
+        t["MACD_Hist"]  = round(float((macd - signal).iloc[-1]), 2)
+    # Bollinger Bands
+    if len(c) >= 20:
+        ma = c.rolling(20).mean()
+        sd = c.rolling(20).std()
+        t["BB_Upper"] = round(float((ma + 2*sd).iloc[-1]), 2)
+        t["BB_Lower"] = round(float((ma - 2*sd).iloc[-1]), 2)
+        t["BB_Mid"]   = round(float(ma.iloc[-1]), 2)
+    # Volatility (annualised)
+    if len(c) >= 20:
+        daily_ret = c.pct_change().dropna()
+        t["Volatility_Ann%"] = round(float(daily_ret.std() * (252**0.5) * 100), 1)
+    # Price vs MAs
+    cur = float(c.iloc[-1])
+    t["Current_Price"] = cur
+    t["1M_Return%"]  = round((cur / float(c.iloc[-min(22,len(c))])  - 1)*100, 2)
+    t["3M_Return%"]  = round((cur / float(c.iloc[-min(66,len(c))])  - 1)*100, 2)
+    t["6M_Return%"]  = round((cur / float(c.iloc[-min(130,len(c))]) - 1)*100, 2)
+    # Average volume ratio
+    if "Volume" in df.columns:
+        v = df["Volume"].astype(float)
+        if len(v) >= 10:
+            t["Vol_Ratio_10d"] = round(float(v.iloc[-5:].mean() / v.iloc[-20:].mean()), 2)
+    return t
+
+def call_claude(prompt: str) -> str:
+    """Call Anthropic API and return streamed text."""
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"Content-Type": "application/json"},
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 1000,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=60,
+        )
+        data = resp.json()
+        return "".join(b.get("text","") for b in data.get("content",[]) if b.get("type")=="text")
+    except Exception as e:
+        return f"⚠ Could not reach AI: {e}"
+
 def do_search(q):
     q=q.strip().upper()
     if len(q)<2: return []
@@ -430,24 +499,71 @@ section[data-testid="stSidebar"]{ display:none !important }
 /* ── SECTION TITLE ── */
 .sct{ font-size:0.6rem; font-weight:600; color:#94a3b8; letter-spacing:0.1em; text-transform:uppercase; padding:10px 0 8px; border-bottom:1px solid #f1f5f9; margin-bottom:12px }
 
+/* ── AI ANALYSIS CARDS ── */
+.ai-card{
+  background:#fff; border:1px solid #e2e8f0; border-radius:10px;
+  padding:16px 18px; margin-bottom:12px;
+  box-shadow:0 1px 4px rgba(0,0,0,0.05);
+}
+.ai-card-header{
+  display:flex; align-items:center; gap:8px; margin-bottom:12px;
+  padding-bottom:10px; border-bottom:1px solid #f1f5f9;
+}
+.ai-badge{
+  font-size:0.58rem; font-weight:600; letter-spacing:0.1em;
+  text-transform:uppercase; padding:3px 9px; border-radius:20px;
+}
+.ai-badge-full{ background:#fff7ed; color:#f97316; border:1px solid #fed7aa }
+.ai-badge-news{ background:#eff6ff; color:#2563eb; border:1px solid #bfdbfe }
+.ai-badge-tech{ background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0 }
+.ai-badge-fund{ background:#fdf4ff; color:#9333ea; border:1px solid #e9d5ff }
+.ai-badge-fin{  background:#fff1f2; color:#e11d48; border:1px solid #fecdd3 }
+.ai-card-title{ font-size:0.82rem; font-weight:600; color:#1e293b }
+.ai-body{
+  font-size:0.76rem; color:#374151; line-height:1.75;
+  white-space:pre-wrap;
+}
+.ai-body strong{ font-weight:600; color:#1e293b }
+.ai-spinner{
+  display:flex; align-items:center; gap:8px;
+  font-size:0.72rem; color:#94a3b8; padding:8px 0;
+  font-family:'JetBrains Mono',monospace;
+}
+.ai-generate-btn{
+  display:inline-flex; align-items:center; gap:6px;
+  font-size:0.72rem; font-weight:500;
+  background:#f97316; color:#fff;
+  border:none; border-radius:6px; padding:7px 16px;
+  cursor:pointer; transition:background 0.15s;
+  font-family:'Inter',sans-serif;
+}
+.ai-generate-btn:hover{ background:#ea6c0a }
+.ai-disclaimer{
+  font-size:0.58rem; color:#94a3b8; margin-top:10px;
+  padding-top:8px; border-top:1px solid #f1f5f9;
+  font-style:italic;
+}
+
 /* ── STREAMLIT BUTTON OVERRIDES ── */
 .stButton > button {
   font-family: 'Inter', sans-serif !important;
-  font-size: 0.7rem !important;
+  font-size: 0.68rem !important;
   font-weight: 500 !important;
   border-radius: 6px !important;
-  padding: 5px 10px !important;
+  padding: 4px 10px !important;
   width: 100% !important;
-  background: #f8fafc !important;
-  color: #64748b !important;
-  border: 1px solid #e2e8f0 !important;
+  background: transparent !important;
+  color: #94a3b8 !important;
+  border: 1px solid #f1f5f9 !important;
   transition: all 0.12s !important;
   white-space: nowrap !important;
+  margin-top: -2px !important;
+  margin-bottom: 2px !important;
 }
 .stButton > button:hover {
-  background: #f1f5f9 !important;
-  color: #1e293b !important;
-  border-color: #cbd5e1 !important;
+  background: #fef9f5 !important;
+  color: #f97316 !important;
+  border-color: #fed7aa !important;
 }
 .stButton > button[kind="primary"] {
   background: #f97316 !important;
@@ -767,11 +883,21 @@ with C:
     st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Center tabs ──
-    ctabs = ["Overview","Fundamentals","Financials","Sectors"]
-    tc    = st.columns(len(ctabs))
-    for i, t in enumerate(ctabs):
+    ctabs = ["Overview","Fundamentals","Financials","Sectors",
+             "🤖 Full AI","📰 News AI","📈 Technical AI","🏛 Fundamental AI","💰 Financial AI"]
+    # Row 1: data tabs
+    tc1 = st.columns(4)
+    data_tabs = ["Overview","Fundamentals","Financials","Sectors"]
+    for i, t in enumerate(data_tabs):
         tp = "primary" if st.session_state.ctab == t else "secondary"
-        if tc[i].button(t, key=f"ct_{t}", type=tp):
+        if tc1[i].button(t, key=f"ct_{t}", type=tp):
+            st.session_state.ctab = t; st.rerun()
+    # Row 2: AI tabs
+    tc2 = st.columns(5)
+    ai_tabs = ["🤖 Full AI","📰 News AI","📈 Technical AI","🏛 Fundamental AI","💰 Financial AI"]
+    for i, t in enumerate(ai_tabs):
+        tp = "primary" if st.session_state.ctab == t else "secondary"
+        if tc2[i].button(t, key=f"ct_{t}", type=tp):
             st.session_state.ctab = t; st.rerun()
 
     # ── OVERVIEW ──────────────────────────────────────────────────────────────
@@ -941,6 +1067,230 @@ with C:
         )
         st.plotly_chart(sfig, use_container_width=True, config={"displayModeBar":False})
 
+    # ══════════════ AI ANALYSIS TABS ══════════════════════════════════════════
+
+    # Shared data prep for all AI tabs
+    elif st.session_state.ctab in ("🤖 Full AI","📰 News AI","📈 Technical AI","🏛 Fundamental AI","💰 Financial AI"):
+
+        sym_label = st.session_state.sel_name
+        ticker    = st.session_state.sel
+
+        # Gather everything once
+        tech_df_1y = hget(ticker, "1y", "1d")
+        tech_df_1m = hget(ticker, "1mo", "1h")
+        technicals = calc_technicals(tech_df_1y)
+
+        # Financials text
+        fin_obj, bs_obj, cf_obj = fget(ticker)
+        def df_to_text(df_in, label, rows=8):
+            if df_in is None or df_in.empty: return f"{label}: not available\n"
+            d = df_in.head(rows).copy()
+            d.index   = [str(x)[:35] for x in d.index]
+            d.columns = [str(c)[:10] for c in d.columns]
+            def fc(x):
+                try:
+                    f=float(x)
+                    if abs(f)>=1e7: return f"₹{f/1e7:.1f}Cr"
+                    if abs(f)>=1e5: return f"₹{f/1e5:.1f}L"
+                    return f"₹{f:,.0f}"
+                except: return str(x)
+            return f"{label}:\n{d.map(fc).to_string()}\n\n"
+
+        fin_text = df_to_text(fin_obj, "Income Statement")
+        bs_text  = df_to_text(bs_obj,  "Balance Sheet")
+        cf_text  = df_to_text(cf_obj,  "Cash Flow")
+
+        # News headlines
+        arts      = news_get(st.session_state.nkey, f"India NSE BSE {sym_label}") if st.session_state.nkey else []
+        news_text = "\n".join([f"- {a.get('title','')} ({a.get('source',{}).get('name','')}, {tago(a.get('publishedAt',''))})"
+                               for a in arts[:12]]) if arts else "No news available (add NewsAPI key in sidebar for live news)."
+
+        # Fundamentals dict
+        fund_keys = [
+            "marketCap","trailingPE","forwardPE","trailingEps","dividendYield",
+            "returnOnEquity","returnOnAssets","grossMargins","operatingMargins",
+            "profitMargins","debtToEquity","currentRatio","freeCashflow",
+            "totalRevenue","ebitda","netIncomeToCommon","earningsGrowth",
+            "revenueGrowth","bookValue","priceToBook","beta","fiftyTwoWeekHigh",
+            "fiftyTwoWeekLow","enterpriseToRevenue","enterpriseToEbitda",
+            "earningsQuarterlyGrowth","sector","industry",
+        ]
+        fund_dict = {k: info.get(k) for k in fund_keys if info.get(k) is not None}
+        fund_text = "\n".join([f"  {k}: {v}" for k,v in fund_dict.items()])
+
+        price_ctx = (f"Current Price: ₹{q['p']:,.2f} | Change: {q['ch']:+.2f} ({q['pct']:+.2f}%) | "
+                     f"Open: ₹{op_:,.2f} | High: ₹{hi:,.2f} | Low: ₹{lo:,.2f} | Prev Close: ₹{pc:,.2f}")
+
+        tech_text = "\n".join([f"  {k}: {v}" for k,v in technicals.items()])
+
+        # ── PROMPTS ────────────────────────────────────────────────────────────
+        PROMPTS = {
+            "🤖 Full AI": f"""You are a senior equity research analyst at a top Indian investment bank. Provide a comprehensive, institutional-quality analysis of {sym_label} ({ticker}).
+
+**TODAY'S PRICE DATA:**
+{price_ctx}
+
+**TECHNICAL INDICATORS:**
+{tech_text}
+
+**FUNDAMENTALS:**
+{fund_text}
+
+**FINANCIAL STATEMENTS SUMMARY:**
+{fin_text}{bs_text}{cf_text}
+
+**RECENT NEWS HEADLINES:**
+{news_text}
+
+Write a thorough analysis covering:
+1. **Executive Summary** – 3-sentence verdict on the stock right now
+2. **Price Action & Momentum** – What the charts say, trend direction, key levels
+3. **Volume Analysis** – What volume signals about conviction
+4. **Technical Setup** – MA positions, RSI, MACD, Bollinger Bands interpretation
+5. **Fundamental Quality** – Business quality, margins, return ratios
+6. **Valuation** – Is it cheap, fair, or expensive vs. sector/history?
+7. **Financial Health** – Balance sheet strength, cash flow quality
+8. **News Sentiment** – How recent headlines affect the thesis
+9. **Risk Factors** – Key risks to the bull/bear case
+10. **Outlook & Verdict** – Bull case, Bear case, and your base case with a clear BUY/HOLD/SELL stance
+
+Be specific with numbers. Be bold with opinions. Write like a Goldman Sachs research note.""",
+
+            "📰 News AI": f"""You are a financial news analyst specialising in Indian equity markets. Analyse the following recent news headlines for {sym_label} ({ticker}) and provide a structured news-driven investment view.
+
+**STOCK CONTEXT:**
+{price_ctx}
+Sector: {info.get('sector','—')} | Industry: {info.get('industry','—')}
+
+**RECENT NEWS HEADLINES:**
+{news_text}
+
+Provide:
+1. **News Sentiment Score** – Overall: Bullish / Neutral / Bearish, and why
+2. **Key Themes** – What are the 2-3 dominant narratives across these headlines?
+3. **Catalysts Identified** – Any near-term positive or negative catalysts visible?
+4. **Market Reaction Assessment** – Are headlines reflected in the current price or is there a divergence?
+5. **Credibility & Source Quality** – Are these from reliable sources? Any conflicting reports?
+6. **Trading Implication** – What should a trader / investor do based purely on this news flow?
+
+If no news is available, provide context on what news would be most important to watch for this type of company.""",
+
+            "📈 Technical AI": f"""You are a professional technical analyst with 20 years of experience in Indian equity markets (NSE/BSE). Analyse the following technical data for {sym_label} ({ticker}) and provide a rigorous, actionable technical analysis.
+
+**CURRENT PRICE DATA:**
+{price_ctx}
+
+**TECHNICAL INDICATORS:**
+{tech_text}
+
+Provide a detailed technical analysis:
+1. **Trend Analysis** – What is the primary trend (daily, weekly)? Is it intact or reversing?
+2. **Moving Average Analysis** – Price vs MA20/50/200 — bullish/bearish cross signals, golden/death cross?
+3. **RSI Analysis** – Is the stock overbought, oversold, or neutral? Divergence present?
+4. **MACD Analysis** – Crossover signals, histogram trend, momentum acceleration/deceleration
+5. **Bollinger Band Analysis** – Squeeze, expansion, breakout, or mean-reversion signal?
+6. **Volume Analysis** – Is the current move confirmed by volume? Volume spike or drought?
+7. **Volatility** – Annualised volatility context — is this a high or low volatility phase?
+8. **Key Levels** – Identify immediate support and resistance levels from the data
+9. **Return Analysis** – 1M/3M/6M returns in context
+10. **Trading Signal** – Clear BULLISH / BEARISH / NEUTRAL signal with confidence level (High/Medium/Low) and suggested entry zone, stop loss, target""",
+
+            "🏛 Fundamental AI": f"""You are a fundamental equity analyst specialising in Indian listed companies. Provide a deep fundamental analysis of {sym_label} ({ticker}).
+
+**CURRENT MARKET DATA:**
+{price_ctx}
+
+**FUNDAMENTAL DATA:**
+{fund_text}
+
+**FINANCIAL STATEMENTS:**
+{fin_text}{bs_text}
+
+Provide a rigorous fundamental analysis:
+1. **Business Quality Assessment** – What do margins, ROE, and ROA say about the quality of this business?
+2. **Growth Analysis** – Revenue and earnings growth trajectory — accelerating or decelerating?
+3. **Profitability Deep Dive** – Gross, operating, and net margin trends and what they imply
+4. **Valuation Analysis** – P/E, Forward P/E, P/B, EV/EBITDA, EV/Revenue vs. sector norms
+5. **Balance Sheet Health** – Debt levels, liquidity, financial leverage risk
+6. **Capital Efficiency** – ROE decomposition (DuPont), asset turnover, free cash flow generation
+7. **Dividend & Capital Allocation** – Dividend yield, payout policy, buybacks
+8. **Competitive Position** – What do these numbers suggest about the company's moat?
+9. **Relative Value** – Cheap, fair value, or overvalued based purely on fundamentals?
+10. **Fundamental Verdict** – STRONG BUY / BUY / HOLD / REDUCE / SELL with key thesis
+
+Use specific numbers from the data provided. Benchmark against Indian market averages where relevant.""",
+
+            "💰 Financial AI": f"""You are a CFA-qualified financial statement analyst. Conduct a thorough financial statement analysis of {sym_label} ({ticker}) based on the following data.
+
+**MARKET CONTEXT:**
+{price_ctx}
+Market Cap: {finr(info.get('marketCap'))} | Sector: {info.get('sector','—')}
+
+**INCOME STATEMENT:**
+{fin_text}
+
+**BALANCE SHEET:**
+{bs_text}
+
+**CASH FLOW STATEMENT:**
+{cf_text}
+
+**KEY RATIOS FROM FINANCIALS:**
+{fund_text}
+
+Provide a comprehensive financial statement analysis:
+1. **Revenue Quality** – Revenue growth, consistency, and sustainability
+2. **Earnings Quality** – Is net income of high quality? Cash conversion, accruals analysis
+3. **Margin Trajectory** – Are margins expanding, contracting, or stable? Why?
+4. **EBITDA Analysis** – EBITDA quality, cash conversion, capex intensity
+5. **Free Cash Flow Analysis** – FCF generation, FCF yield, capex vs. depreciation
+6. **Working Capital** – Working capital trends, days sales outstanding, inventory days
+7. **Debt & Leverage** – Debt structure, interest coverage, net debt/EBITDA
+8. **Return on Capital** – ROCE, ROE, ROA trends year-over-year
+9. **Red Flags** – Any accounting concerns, aggressive recognition, or balance sheet risks?
+10. **Financial Health Score** – Rate the financial health 1-10 with justification and overall verdict
+
+Be forensic. Flag any inconsistencies between the income statement, balance sheet, and cash flow."""
+        }
+
+        active_ai = st.session_state.ctab
+        badge_map = {
+            "🤖 Full AI":        ("ai-badge-full",  "🤖 Full Stock Analysis"),
+            "📰 News AI":        ("ai-badge-news",  "📰 News & Sentiment"),
+            "📈 Technical AI":   ("ai-badge-tech",  "📈 Technical Analysis"),
+            "🏛 Fundamental AI": ("ai-badge-fund",  "🏛 Fundamental Analysis"),
+            "💰 Financial AI":   ("ai-badge-fin",   "💰 Financial Statement Analysis"),
+        }
+        badge_cls, title = badge_map[active_ai]
+        cache_key = f"ai_{active_ai}_{ticker}"
+
+        st.markdown(f"""<div class="ai-card">
+          <div class="ai-card-header">
+            <span class="ai-badge {badge_cls}">{active_ai}</span>
+            <span class="ai-card-title">{title} — {sym_label}</span>
+          </div>
+        """, unsafe_allow_html=True)
+
+        # Show cached result or generate button
+        if cache_key in st.session_state:
+            st.markdown(f'<div class="ai-body">{st.session_state[cache_key]}</div>', unsafe_allow_html=True)
+            col_a, col_b = st.columns([1,4])
+            with col_a:
+                if st.button("↺ Regenerate", key=f"regen_{cache_key}"):
+                    del st.session_state[cache_key]
+                    st.rerun()
+        else:
+            if active_ai == "📰 News AI" and not arts:
+                st.markdown('<div style="font-size:0.72rem;color:#94a3b8;padding:8px 0">Add your NewsAPI key in the sidebar to enable news-based AI analysis.</div>', unsafe_allow_html=True)
+            if st.button(f"✦ Generate {title}", key=f"gen_{cache_key}", type="primary"):
+                with st.spinner("Analysing with Claude AI…"):
+                    result = call_claude(PROMPTS[active_ai])
+                st.session_state[cache_key] = result
+                st.rerun()
+
+        st.markdown('<div class="ai-disclaimer">⚠ AI-generated analysis is for informational purposes only. Not financial advice. Always do your own research before investing.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
 
 # ══════════════════════════════════ RIGHT ═════════════════════════════════════
 with R:
@@ -968,14 +1318,14 @@ with R:
             st.markdown(f"""<div class="{sel}">
               <div>
                 <div class="rr-sym">{r['sym']}</div>
-                <div class="rr-nm">{r['name'][:22]}</div>
+                <div class="rr-nm">{r['name'][:24]}</div>
               </div>
               <div>
                 <div class="rr-p">{ps}</div>
                 <div class="rr-c {cls_r}">{arr_r} {abs(r['pct']):.2f}%</div>
               </div>
             </div>""", unsafe_allow_html=True)
-            if st.button("↗", key=f"rsel_{tab}_{r['sym']}", use_container_width=True):
+            if st.button(f"Select {r['sym']}", key=f"rsel_{tab}_{r['sym']}", use_container_width=True):
                 st.session_state.sel      = r["full"]
                 st.session_state.sel_name = r["name"]
                 st.rerun()
@@ -992,7 +1342,7 @@ with R:
                 <div class="rr-c {cls_i}">{arr_i} {abs(qi['pct']):.2f}%</div>
               </div>
             </div>""", unsafe_allow_html=True)
-            if st.button("↗", key=f"ri_{ix['sym']}", use_container_width=True):
+            if st.button(f"Select {ix['name'][:16]}", key=f"ri_{ix['sym']}", use_container_width=True):
                 st.session_state.sel      = ix["sym"]
                 st.session_state.sel_name = ix["name"]
                 st.rerun()
@@ -1009,7 +1359,7 @@ with R:
                 <div class="rr-c {cls_c}">{arr_c} {abs(qc['pct']):.2f}%</div>
               </div>
             </div>""", unsafe_allow_html=True)
-            if st.button("↗", key=f"rc_{c['sym']}", use_container_width=True):
+            if st.button(f"Select {c['name'][:16]}", key=f"rc_{c['sym']}", use_container_width=True):
                 st.session_state.sel      = c["sym"]
                 st.session_state.sel_name = c["name"]
                 st.rerun()
@@ -1030,7 +1380,7 @@ with R:
                 <div class="rr-c {cls_m}">{arr_m} {abs(qm['pct']):.2f}%</div>
               </div>
             </div>""", unsafe_allow_html=True)
-            if st.button("↗", key=f"rm_{m['sym']}", use_container_width=True):
+            if st.button(f"Select {bm[:16]}", key=f"rm_{m['sym']}", use_container_width=True):
                 st.session_state.sel      = m["sym"]
                 st.session_state.sel_name = m["name"]
                 st.rerun()
