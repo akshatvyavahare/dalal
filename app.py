@@ -3,7 +3,7 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import requests
 
 st.set_page_config(page_title="Dalal Terminal", page_icon="◈",
@@ -64,18 +64,17 @@ NSE_STOCKS = {
     "MCX":"MCX India","PHOENIXLTD":"Phoenix Mills","PRESTIGE":"Prestige Estates",
     "VBL":"Varun Beverages","PIIND":"PI Industries","BALKRISIND":"Balkrishna Industries",
     "DEEPAKNTR":"Deepak Nitrite","IRFC":"IRFC","LICHSGFIN":"LIC Housing Finance",
-    "LTTS":"L&T Technology Services","NH":"Narayana Hrudayalaya",
-    "NLCINDIA":"NLC India","OLECTRA":"Olectra Greentech","PCBL":"PCBL",
+    "LTTS":"L&T Tech Services","NH":"Narayana Hrudayalaya",
+    "NLCINDIA":"NLC India","OLECTRA":"Olectra Greentech",
     "PVR":"PVR INOX","RBLBANK":"RBL Bank","RITES":"RITES",
     "SCHAEFFLER":"Schaeffler India","SOBHA":"Sobha","STARHEALTH":"Star Health",
     "SUNDARMFIN":"Sundaram Finance","SUPREMEIND":"Supreme Industries",
     "TANLA":"Tanla Platforms","THERMAX":"Thermax","TIINDIA":"Tube Investments",
-    "TRIDENT":"Trident","VBL":"Varun Beverages","VINATIORGA":"Vinati Organics",
+    "TRIDENT":"Trident","VINATIORGA":"Vinati Organics",
     "ZEEL":"Zee Entertainment","ZYDUSLIFE":"Zydus Lifesciences",
     "KPITTECH":"KPIT Technologies","KAYNES":"Kaynes Technology",
     "MAPMYINDIA":"MapmyIndia","CAMPUS":"Campus Activewear",
 }
-
 INDICES = [
     {"sym":"^NSEI","name":"NIFTY 50"},{"sym":"^BSESN","name":"SENSEX"},
     {"sym":"^NSMIDCP","name":"NIFTY MID"},{"sym":"^CNXIT","name":"NIFTY IT"},
@@ -83,7 +82,7 @@ INDICES = [
 ]
 COMMODITIES = [
     {"sym":"GC=F","name":"Gold"},{"sym":"SI=F","name":"Silver"},
-    {"sym":"CL=F","name":"Crude Oil"},{"sym":"NG=F","name":"Natural Gas"},
+    {"sym":"CL=F","name":"Crude Oil"},{"sym":"NG=F","name":"Nat Gas"},
     {"sym":"USDINR=X","name":"USD/INR"},{"sym":"EURINR=X","name":"EUR/INR"},
     {"sym":"GBPINR=X","name":"GBP/INR"},
 ]
@@ -101,7 +100,7 @@ SECTORS = [
     {"sym":"^CNXAUTO","name":"Auto"},{"sym":"^CNXREALTY","name":"Realty"},
     {"sym":"^CNXMETAL","name":"Metal"},{"sym":"^CNXENERGY","name":"Energy"},
 ]
-ALL_INDICES = [
+ALL_IDX = [
     {"sym":"^NSEI","name":"NIFTY 50"},{"sym":"^BSESN","name":"SENSEX"},
     {"sym":"^NSMIDCP","name":"NIFTY Midcap"},{"sym":"^CNXSMALLCAP","name":"NIFTY Smallcap"},
     {"sym":"^CNXBANK","name":"Bank NIFTY"},{"sym":"^CNXIT","name":"NIFTY IT"},
@@ -124,8 +123,9 @@ PERIODS = {
     "1D":("1d","5m"),"1W":("5d","15m"),"1M":("1mo","1h"),
     "3M":("3mo","1d"),"6M":("6mo","1d"),"1Y":("1y","1d"),"3Y":("3y","1wk"),
 }
+IST = timezone(timedelta(hours=5, minutes=30))
 
-# ── SESSION STATE ───────────────────────────────────────────────────────────────
+# ── SESSION STATE ──────────────────────────────────────────────────────────────
 def ss(k,v):
     if k not in st.session_state: st.session_state[k]=v
 
@@ -143,7 +143,7 @@ ss("sel","RELIANCE.NS"); ss("sel_name","Reliance Industries")
 ss("period","1M"); ss("ctype","Candle"); ss("rtab","Gainers")
 ss("ctab","Overview"); ss("nkey","")
 
-# ── DATA ─────────────────────────────────────────────────────────────────────
+# ── DATA ──────────────────────────────────────────────────────────────────────
 def to_sym(raw):
     r=raw.strip().upper()
     if any(r.endswith(s) for s in [".NS",".BO","=F","=X"]) or r.startswith("^"): return r
@@ -158,7 +158,7 @@ def qget(sym):
         ch=round(p-pc,2); pct=round((ch/pc*100) if pc else 0,2)
         return {"p":p,"pc":pc,"ch":ch,"pct":pct,
                 "hi":round(float(fi.day_high or 0),2),
-                "lo":round(float(fi.day_low or 0),2)}
+                "lo":round(float(fi.day_low  or 0),2)}
     except: return {"p":0,"pc":0,"ch":0,"pct":0,"hi":0,"lo":0}
 
 @st.cache_data(ttl=300,show_spinner=False)
@@ -186,14 +186,13 @@ def news_get(key,q):
     if not key: return []
     try:
         r=requests.get("https://newsapi.org/v2/everything",
-            params={"q":q,"apiKey":key,"sortBy":"publishedAt","pageSize":15,"language":"en"},
-            timeout=8)
+            params={"q":q,"apiKey":key,"sortBy":"publishedAt","pageSize":15,"language":"en"},timeout=8)
         d=r.json(); return d.get("articles",[]) if d.get("status")=="ok" else []
     except: return []
 
 def tago(s):
     try:
-        d=int((datetime.utcnow()-datetime.strptime(s,"%Y-%m-%dT%H:%M:%SZ")).total_seconds())
+        d=int((datetime.now(timezone.utc)-datetime.strptime(s,"%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)).total_seconds())
         if d<3600: return f"{d//60}m ago"
         if d<86400: return f"{d//3600}h ago"
         return f"{d//86400}d ago"
@@ -226,243 +225,275 @@ def sv(v,pre="₹",dec=2,fmt=None):
 def ud(pct): return ("▲","#16a34a") if pct>=0 else ("▼","#dc2626")
 def sc(pct): return "pos" if pct>=0 else "neg"
 
-def search(q):
+def do_search(q):
     q=q.strip().upper()
     if len(q)<2: return []
     return [{"sym":k,"name":v} for k,v in NSE_STOCKS.items()
             if q in k or q in v.upper()][:7]
 
-# ── CSS ────────────────────────────────────────────────────────────────────────
+# ── IST TIME ──────────────────────────────────────────────────────────────────
+now_ist = datetime.now(IST)
+now_str = now_ist.strftime("%d %b %Y  %H:%M IST")
+
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
 html,body,[class*="css"]{
   font-family:'Inter',sans-serif;
-  background:#f0f2f5;color:#1e293b;font-size:14px;
+  background:#f0f2f5 !important;
+  color:#1e293b;
 }
-.main .block-container{padding:0!important;max-width:100%!important}
-section[data-testid="stSidebar"]{display:none!important}
-#MainMenu,footer,header,[data-testid="stToolbar"],.stDeployButton{display:none!important}
-::-webkit-scrollbar{width:4px;background:transparent}
-::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:4px}
+
+/* ── HIDE STREAMLIT CHROME ── */
+.main .block-container{
+  padding: 0 !important;
+  max-width: 100% !important;
+}
+section[data-testid="stSidebar"]{ display:none !important }
+#MainMenu,footer,header,[data-testid="stToolbar"],.stDeployButton{ display:none !important }
+::-webkit-scrollbar{ width:4px; background:transparent }
+::-webkit-scrollbar-thumb{ background:#cbd5e1; border-radius:4px }
 
 /* ── TOPBAR ── */
 .topbar{
-  display:flex;align-items:center;gap:8px;
-  padding:0 20px;height:52px;
-  background:#ffffff;
+  display:flex; align-items:center; gap:8px;
+  padding:0 20px; height:52px;
+  background:#fff;
   border-bottom:1px solid #e2e8f0;
-  position:sticky;top:0;z-index:100;
-  box-shadow:0 1px 3px rgba(0,0,0,0.06);
+  position:sticky; top:0; z-index:200;
+  box-shadow:0 1px 4px rgba(0,0,0,0.06);
+  overflow-x:auto;
 }
 .t-logo{
   font-family:'JetBrains Mono',monospace;
-  font-size:0.82rem;font-weight:600;color:#0f172a;
-  letter-spacing:0.12em;margin-right:12px;white-space:nowrap;
-  display:flex;align-items:center;gap:6px;
+  font-size:0.8rem; font-weight:600; color:#0f172a;
+  letter-spacing:0.14em; white-space:nowrap;
+  display:flex; align-items:center; gap:5px; margin-right:8px;
 }
-.t-logo-dot{color:#f97316;font-size:1rem}
-.idx-chip{
-  display:flex;flex-direction:column;justify-content:center;
-  padding:4px 12px;border-radius:6px;
-  background:#f8fafc;border:1px solid #e2e8f0;
-  min-width:88px;cursor:default;transition:border-color 0.15s;
+.t-dot{ color:#f97316 }
+.ic{
+  display:flex; flex-direction:column; justify-content:center;
+  padding:4px 12px; border-radius:6px;
+  background:#f8fafc; border:1px solid #e2e8f0;
+  min-width:90px; white-space:nowrap;
 }
-.idx-chip:hover{border-color:#cbd5e1}
-.ic-name{font-size:0.56rem;color:#94a3b8;letter-spacing:0.08em;text-transform:uppercase;font-family:'JetBrains Mono',monospace}
-.ic-val{font-family:'JetBrains Mono',monospace;font-size:0.78rem;font-weight:600;color:#0f172a;line-height:1.2}
-.ic-chg{font-family:'JetBrains Mono',monospace;font-size:0.6rem;font-weight:500}
-.ic-chg.pos{color:#16a34a}.ic-chg.neg{color:#dc2626}
-.t-right{margin-left:auto;display:flex;align-items:center;gap:10px}
-.t-time{font-family:'JetBrains Mono',monospace;font-size:0.6rem;color:#94a3b8}
-.t-live{font-size:0.6rem;color:#16a34a;background:#f0fdf4;border:1px solid #bbf7d0;
-  padding:2px 8px;border-radius:20px;font-weight:500;font-family:'JetBrains Mono',monospace}
+.ic-n{ font-size:0.52rem; color:#94a3b8; letter-spacing:0.08em; text-transform:uppercase; font-family:'JetBrains Mono',monospace }
+.ic-v{ font-family:'JetBrains Mono',monospace; font-size:0.78rem; font-weight:600; color:#0f172a; line-height:1.3 }
+.ic-c{ font-family:'JetBrains Mono',monospace; font-size:0.6rem; font-weight:500 }
+.ic-c.pos{ color:#16a34a } .ic-c.neg{ color:#dc2626 }
+.t-r{ margin-left:auto; display:flex; align-items:center; gap:10px; flex-shrink:0 }
+.t-time{ font-family:'JetBrains Mono',monospace; font-size:0.6rem; color:#94a3b8; white-space:nowrap }
+.t-live{ font-size:0.6rem; color:#16a34a; background:#f0fdf4; border:1px solid #bbf7d0; padding:2px 8px; border-radius:20px; font-weight:500; font-family:'JetBrains Mono',monospace; white-space:nowrap }
 
-/* ── PANELS ── */
-.left-panel{
-  background:#ffffff;height:calc(100vh - 52px);overflow-y:auto;
-  border-right:1px solid #e2e8f0;
-}
-.center-panel{
-  background:#f0f2f5;height:calc(100vh - 52px);overflow-y:auto;
-  padding:16px;
-}
-.right-panel{
-  background:#ffffff;height:calc(100vh - 52px);overflow-y:auto;
-  border-left:1px solid #e2e8f0;
+/* ── THREE-PANEL LAYOUT ──
+   We target Streamlit's column wrappers directly by nth-child.
+   Column 1 = Left panel (white, border-right)
+   Column 2 = Center panel (light grey bg)
+   Column 3 = Right panel (white, border-left)
+*/
+
+/* Remove default column padding */
+[data-testid="column"] { padding: 0 !important; }
+
+/* Left column */
+[data-testid="column"]:nth-of-type(1) > div:first-child {
+  background: #ffffff;
+  border-right: 1px solid #e2e8f0;
+  height: calc(100vh - 52px);
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
-/* ── PANEL SECTION HEADER ── */
-.psh{
-  font-size:0.6rem;font-weight:600;color:#94a3b8;letter-spacing:0.12em;
-  text-transform:uppercase;padding:10px 14px 8px;
+/* Center column */
+[data-testid="column"]:nth-of-type(2) > div:first-child {
+  background: #f0f2f5;
+  height: calc(100vh - 52px);
+  overflow-y: auto;
+  padding: 14px 16px;
+}
+
+/* Right column */
+[data-testid="column"]:nth-of-type(3) > div:first-child {
+  background: #ffffff;
+  border-left: 1px solid #e2e8f0;
+  height: calc(100vh - 52px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* ── SECTION HEADER ── */
+.sh{
+  font-size:0.58rem; font-weight:600; color:#94a3b8;
+  letter-spacing:0.12em; text-transform:uppercase;
+  padding:10px 14px 8px;
   border-bottom:1px solid #f1f5f9;
+  background:#fff;
 }
 
-/* ── SEARCH ── */
-.search-wrap{padding:10px 12px;border-bottom:1px solid #f1f5f9}
-.sr-box{
-  width:100%;background:#f8fafc;border:1px solid #e2e8f0;
-  border-radius:6px;padding:7px 10px;color:#1e293b;
-  font-family:'Inter',sans-serif;font-size:0.75rem;outline:none;
-  transition:all 0.15s;
+/* ── SEARCH RESULTS ── */
+.sr-drop{
+  background:#fff; border:1px solid #e2e8f0;
+  border-radius:6px; margin:0 10px 4px;
+  box-shadow:0 4px 12px rgba(0,0,0,0.08); overflow:hidden;
 }
-.sr-box:focus{border-color:#f97316;background:#fff;box-shadow:0 0 0 3px #fed7aa44}
-.sr-box::placeholder{color:#94a3b8}
-.sr-dropdown{background:#fff;border:1px solid #e2e8f0;border-radius:6px;
-  margin-top:4px;box-shadow:0 4px 12px rgba(0,0,0,0.08);overflow:hidden}
-.sr-item{padding:7px 10px;cursor:pointer;border-bottom:1px solid #f8fafc;
-  display:flex;justify-content:space-between;align-items:center;transition:background 0.1s}
-.sr-item:last-child{border-bottom:none}
-.sr-item:hover{background:#fef9f5}
-.sr-sym{font-family:'JetBrains Mono',monospace;font-size:0.72rem;font-weight:600;color:#f97316}
-.sr-nm{font-size:0.65rem;color:#64748b}
-.sr-add{font-size:0.65rem;color:#94a3b8;border:1px solid #e2e8f0;
-  padding:2px 7px;border-radius:4px;cursor:pointer;transition:all 0.1s;background:#f8fafc}
-.sr-add:hover{color:#f97316;border-color:#f97316;background:#fef9f5}
+.sr-row{
+  padding:7px 10px; border-bottom:1px solid #f8fafc;
+  transition:background 0.1s; cursor:pointer;
+}
+.sr-row:last-child{ border-bottom:none }
+.sr-row:hover{ background:#fef9f5 }
+.sr-sym{ font-family:'JetBrains Mono',monospace; font-size:0.72rem; font-weight:600; color:#f97316 }
+.sr-nm{ font-size:0.62rem; color:#64748b; margin-top:1px }
 
-/* ── WATCHLIST ROWS ── */
-.wl-row{
-  display:flex;align-items:center;padding:8px 12px;
-  border-bottom:1px solid #f8fafc;cursor:pointer;transition:background 0.1s;gap:6px;
+/* ── WATCHLIST ROW ── */
+.wl-outer{
+  display:flex; align-items:stretch;
+  border-bottom:1px solid #f8fafc;
+  transition:background 0.1s;
 }
-.wl-row:hover{background:#fef9f5}
-.wl-row.sel{background:#fff7ed;border-left:3px solid #f97316}
-.wl-sym{font-family:'JetBrains Mono',monospace;font-size:0.72rem;font-weight:600;
-  color:#1e293b;min-width:68px}
-.wl-price{font-family:'JetBrains Mono',monospace;font-size:0.72rem;color:#374151;flex:1}
-.wl-pct{font-size:0.65rem;font-weight:500;padding:2px 6px;border-radius:4px;white-space:nowrap}
-.wl-pct.pos{color:#16a34a;background:#f0fdf4}
-.wl-pct.neg{color:#dc2626;background:#fef2f2}
-.wl-del{font-size:0.65rem;color:#cbd5e1;cursor:pointer;padding:2px 5px;
-  border-radius:3px;transition:all 0.1s;margin-left:auto;line-height:1}
-.wl-del:hover{color:#dc2626;background:#fef2f2}
+.wl-outer:hover{ background:#fef9f5 }
+.wl-outer.wl-sel{ background:#fff7ed; border-left:3px solid #f97316 }
+.wl-info{ display:flex; flex-direction:column; justify-content:center;
+  padding:7px 4px 7px 12px; flex:1; min-width:0; cursor:pointer }
+.wl-sym{ font-family:'JetBrains Mono',monospace; font-size:0.7rem; font-weight:600; color:#1e293b }
+.wl-meta{ display:flex; align-items:center; gap:6px; margin-top:2px }
+.wl-price{ font-family:'JetBrains Mono',monospace; font-size:0.68rem; color:#374151 }
+.wl-pct{ font-size:0.62rem; font-weight:500; padding:1px 5px; border-radius:3px }
+.wl-pct.pos{ color:#16a34a; background:#f0fdf4 }
+.wl-pct.neg{ color:#dc2626; background:#fef2f2 }
 
 /* ── NEWS ── */
-.news-item{padding:9px 14px;border-bottom:1px solid #f8fafc;cursor:pointer;transition:background 0.1s}
-.news-item:hover{background:#f8fafc}
-.ni-src{font-size:0.58rem;font-weight:600;color:#f97316;text-transform:uppercase;letter-spacing:0.06em}
-.ni-title{font-size:0.7rem;color:#334155;line-height:1.4;margin-top:2px}
-.ni-time{font-size:0.58rem;color:#94a3b8;margin-top:3px;font-family:'JetBrains Mono',monospace}
+.ni{ padding:8px 14px; border-bottom:1px solid #f8fafc; cursor:pointer; transition:background 0.1s }
+.ni:hover{ background:#f8fafc }
+.ni-s{ font-size:0.56rem; font-weight:600; color:#f97316; text-transform:uppercase; letter-spacing:0.06em }
+.ni-t{ font-size:0.68rem; color:#334155; line-height:1.4; margin-top:2px }
+.ni-d{ font-size:0.56rem; color:#94a3b8; margin-top:3px; font-family:'JetBrains Mono',monospace }
 
 /* ── STOCK BANNER ── */
 .banner{
-  background:#ffffff;border-radius:10px;padding:16px 18px;
-  border:1px solid #e2e8f0;margin-bottom:12px;
+  background:#fff; border-radius:10px; padding:14px 18px;
+  border:1px solid #e2e8f0; margin-bottom:12px;
   box-shadow:0 1px 4px rgba(0,0,0,0.05);
 }
-.bn-name{font-size:1.05rem;font-weight:600;color:#0f172a;line-height:1}
-.bn-sub{font-size:0.62rem;color:#94a3b8;margin-top:3px;font-family:'JetBrains Mono',monospace}
-.bn-price{font-family:'JetBrains Mono',monospace;font-size:1.9rem;font-weight:600;
-  color:#0f172a;line-height:1;text-align:right}
-.bn-chg{font-family:'JetBrains Mono',monospace;font-size:0.8rem;font-weight:500;
-  text-align:right;margin-top:4px}
-.ohlc-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
-.ohlc-tag{
-  background:#f8fafc;border:1px solid #e2e8f0;border-radius:5px;
-  padding:3px 10px;font-family:'JetBrains Mono',monospace;font-size:0.63rem;
-}
-.ol{color:#94a3b8;margin-right:3px}
-.ov{color:#1e293b;font-weight:600}
-.ov-g{color:#16a34a;font-weight:600}
-.ov-r{color:#dc2626;font-weight:600}
+.bn-name{ font-size:1rem; font-weight:600; color:#0f172a }
+.bn-sub{ font-size:0.6rem; color:#94a3b8; margin-top:2px; font-family:'JetBrains Mono',monospace }
+.bn-price{ font-family:'JetBrains Mono',monospace; font-size:1.85rem; font-weight:600; color:#0f172a; line-height:1; text-align:right }
+.bn-chg{ font-family:'JetBrains Mono',monospace; font-size:0.78rem; font-weight:500; text-align:right; margin-top:4px }
+.orow{ display:flex; gap:6px; flex-wrap:wrap; margin-top:10px }
+.otag{ background:#f8fafc; border:1px solid #e2e8f0; border-radius:5px; padding:3px 10px; font-family:'JetBrains Mono',monospace; font-size:0.62rem }
+.ol{ color:#94a3b8; margin-right:2px }
+.ov{ color:#1e293b; font-weight:600 }
+.ov-g{ color:#16a34a; font-weight:600 }
+.ov-r{ color:#dc2626; font-weight:600 }
 
-/* ── PERIOD / CHART BUTTONS (Streamlit overrides) ── */
-.stButton>button{
-  font-family:'Inter',sans-serif!important;
-  font-size:0.7rem!important;font-weight:500!important;
-  border-radius:6px!important;padding:5px 12px!important;
-  width:100%!important;transition:all 0.12s!important;
-  background:#f8fafc!important;color:#64748b!important;
-  border:1px solid #e2e8f0!important;
-}
-.stButton>button:hover{
-  background:#f1f5f9!important;color:#1e293b!important;
-  border-color:#cbd5e1!important;
-}
-.stButton>button[kind="primary"]{
-  background:#f97316!important;color:#ffffff!important;
-  border-color:#f97316!important;font-weight:600!important;
+/* ── CHART AREA ── */
+.chart-wrap{
+  background:#fff; border:1px solid #e2e8f0;
+  border-radius:10px; padding:10px 10px 4px;
+  margin-bottom:12px;
+  box-shadow:0 1px 4px rgba(0,0,0,0.05);
 }
 
 /* ── METRIC CARDS ── */
-.mc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px}
-.mc{
-  background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;
-  padding:10px 12px;box-shadow:0 1px 3px rgba(0,0,0,0.04);
-}
-.mc-lbl{font-size:0.58rem;font-weight:500;color:#94a3b8;
-  text-transform:uppercase;letter-spacing:0.08em}
-.mc-val{font-family:'JetBrains Mono',monospace;font-size:0.85rem;
-  font-weight:600;color:#1e293b;margin-top:5px}
-.mc-val.pos{color:#16a34a}
-.mc-val.neg{color:#dc2626}
-
-/* ── SECTION TITLE ── */
-.sct{
-  font-size:0.62rem;font-weight:600;color:#94a3b8;letter-spacing:0.1em;
-  text-transform:uppercase;padding:10px 0 8px;
-  border-bottom:1px solid #f1f5f9;margin-bottom:12px;
-}
+.mc{ background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:9px 11px; box-shadow:0 1px 3px rgba(0,0,0,0.04) }
+.mc-l{ font-size:0.55rem; font-weight:500; color:#94a3b8; text-transform:uppercase; letter-spacing:0.08em }
+.mc-v{ font-family:'JetBrains Mono',monospace; font-size:0.82rem; font-weight:600; color:#1e293b; margin-top:4px }
+.mc-v.pos{ color:#16a34a } .mc-v.neg{ color:#dc2626 }
 
 /* ── FUND TABLE ── */
-.ft{width:100%;border-collapse:collapse}
-.ft td{padding:6px 10px;border-bottom:1px solid #f8fafc;font-size:0.72rem}
-.ft tr:hover td{background:#fef9f5}
-.fl{color:#64748b;font-family:'Inter',sans-serif;font-size:0.68rem}
-.fv{color:#1e293b;text-align:right;font-family:'JetBrains Mono',monospace;
-  font-size:0.72rem;font-weight:500}
-
-/* ── RIGHT PANEL ROWS ── */
-.rr{
-  display:flex;align-items:center;justify-content:space-between;
-  padding:8px 14px;border-bottom:1px solid #f8fafc;cursor:pointer;
-  transition:background 0.1s;
-}
-.rr:hover{background:#fef9f5}
-.rr.sel{background:#fff7ed;border-left:3px solid #f97316}
-.rr-sym{font-family:'JetBrains Mono',monospace;font-size:0.72rem;font-weight:600;color:#1e293b}
-.rr-name{font-size:0.6rem;color:#94a3b8;margin-top:1px}
-.rr-price{font-family:'JetBrains Mono',monospace;font-size:0.72rem;font-weight:500;color:#374151;text-align:right}
-.rr-chg{font-size:0.65rem;font-weight:500;text-align:right;margin-top:1px;font-family:'JetBrains Mono',monospace}
-.rr-chg.pos{color:#16a34a}.rr-chg.neg{color:#dc2626}
+.ft{ width:100%; border-collapse:collapse }
+.ft td{ padding:6px 8px; border-bottom:1px solid #f8fafc; font-size:0.7rem }
+.ft tr:hover td{ background:#fef9f5 }
+.fl{ color:#64748b; font-size:0.65rem }
+.fv{ color:#1e293b; text-align:right; font-family:'JetBrains Mono',monospace; font-size:0.7rem; font-weight:500 }
 
 /* ── SECTOR TILE ── */
-.sec-tile{
-  background:#ffffff;border:1px solid #e2e8f0;border-radius:7px;
-  padding:10px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.04);
+.sec-t{ background:#fff; border:1px solid #e2e8f0; border-radius:7px; padding:9px; text-align:center; box-shadow:0 1px 3px rgba(0,0,0,0.04) }
+.sec-n{ font-size:0.57rem; font-weight:500; color:#94a3b8; text-transform:uppercase; letter-spacing:0.06em }
+.sec-p{ font-family:'JetBrains Mono',monospace; font-size:0.85rem; font-weight:600; margin-top:4px }
+.sec-p.pos{ color:#16a34a } .sec-p.neg{ color:#dc2626 }
+
+/* ── RIGHT PANEL ROWS ── */
+.rr{ display:flex; align-items:center; justify-content:space-between; padding:8px 14px; border-bottom:1px solid #f8fafc; cursor:pointer; transition:background 0.1s }
+.rr:hover{ background:#fef9f5 }
+.rr.rr-sel{ background:#fff7ed; border-left:3px solid #f97316 }
+.rr-sym{ font-family:'JetBrains Mono',monospace; font-size:0.7rem; font-weight:600; color:#1e293b }
+.rr-nm{ font-size:0.58rem; color:#94a3b8; margin-top:1px }
+.rr-p{ font-family:'JetBrains Mono',monospace; font-size:0.7rem; font-weight:500; color:#374151; text-align:right }
+.rr-c{ font-family:'JetBrains Mono',monospace; font-size:0.62rem; font-weight:500; text-align:right; margin-top:1px }
+.rr-c.pos{ color:#16a34a } .rr-c.neg{ color:#dc2626 }
+
+/* ── SECTION TITLE ── */
+.sct{ font-size:0.6rem; font-weight:600; color:#94a3b8; letter-spacing:0.1em; text-transform:uppercase; padding:10px 0 8px; border-bottom:1px solid #f1f5f9; margin-bottom:12px }
+
+/* ── STREAMLIT BUTTON OVERRIDES ── */
+.stButton > button {
+  font-family: 'Inter', sans-serif !important;
+  font-size: 0.7rem !important;
+  font-weight: 500 !important;
+  border-radius: 6px !important;
+  padding: 5px 10px !important;
+  width: 100% !important;
+  background: #f8fafc !important;
+  color: #64748b !important;
+  border: 1px solid #e2e8f0 !important;
+  transition: all 0.12s !important;
+  white-space: nowrap !important;
 }
-.sec-n{font-size:0.6rem;font-weight:500;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em}
-.sec-p{font-family:'JetBrains Mono',monospace;font-size:0.88rem;font-weight:600;margin-top:4px}
-.sec-p.pos{color:#16a34a}.sec-p.neg{color:#dc2626}
+.stButton > button:hover {
+  background: #f1f5f9 !important;
+  color: #1e293b !important;
+  border-color: #cbd5e1 !important;
+}
+.stButton > button[kind="primary"] {
+  background: #f97316 !important;
+  color: #ffffff !important;
+  border-color: #f97316 !important;
+  font-weight: 600 !important;
+}
 
 /* ── TEXT INPUT OVERRIDES ── */
-.stTextInput>div>div>input{
-  background:#f8fafc!important;border:1px solid #e2e8f0!important;
-  color:#1e293b!important;border-radius:6px!important;
-  font-size:0.75rem!important;padding:7px 10px!important;
+.stTextInput > div > div > input {
+  background: #f8fafc !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #1e293b !important;
+  border-radius: 6px !important;
+  font-size: 0.72rem !important;
+  padding: 7px 10px !important;
+  font-family: 'Inter', sans-serif !important;
 }
-.stTextInput>div>div>input:focus{
-  border-color:#f97316!important;box-shadow:0 0 0 3px #fed7aa44!important;
-  background:#fff!important;
+.stTextInput > div > div > input:focus {
+  border-color: #f97316 !important;
+  box-shadow: 0 0 0 3px #fed7aa33 !important;
+  background: #fff !important;
 }
-.stTextInput>div>div>input::placeholder{color:#94a3b8!important}
-.stTextInput label,[data-testid="stWidgetLabel"]{
-  font-size:0.58rem!important;font-weight:600!important;color:#94a3b8!important;
-  text-transform:uppercase!important;letter-spacing:0.1em!important;
+.stTextInput > div > div > input::placeholder { color: #94a3b8 !important }
+.stTextInput label, [data-testid="stWidgetLabel"] {
+  font-size: 0.56rem !important; font-weight: 600 !important;
+  color: #94a3b8 !important; text-transform: uppercase !important;
+  letter-spacing: 0.1em !important;
 }
-/* expander */
-.streamlit-expanderHeader{
-  background:#f8fafc!important;border:1px solid #e2e8f0!important;
-  border-radius:6px!important;font-size:0.7rem!important;color:#64748b!important;
-  font-family:'Inter',sans-serif!important;
+
+/* ── EXPANDER ── */
+.streamlit-expanderHeader {
+  background: #f8fafc !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 6px !important;
+  font-size: 0.68rem !important;
+  color: #64748b !important;
+  padding: 6px 12px !important;
 }
-/* dataframe */
-.stDataFrame{border-radius:8px!important;border:1px solid #e2e8f0!important;overflow:hidden!important}
-[data-testid="stPlotlyChart"]{border-radius:8px;overflow:hidden}
-div[data-testid="column"]{padding:0 3px!important}
+details[open] .streamlit-expanderHeader {
+  border-radius: 6px 6px 0 0 !important;
+}
+
+/* ── DATAFRAME ── */
+.stDataFrame { border-radius: 8px !important; border: 1px solid #e2e8f0 !important; overflow: hidden !important }
+[data-testid="stPlotlyChart"] { border-radius: 8px; overflow: hidden }
 </style>
 """, unsafe_allow_html=True)
 
@@ -471,138 +502,147 @@ idx_q = {i["sym"]: qget(i["sym"]) for i in INDICES}
 chips = ""
 for i in INDICES:
     q = idx_q[i["sym"]]
-    arr, col = ud(q["pct"])
-    cls = sc(q["pct"])
-    chips += f"""<div class="idx-chip">
-      <span class="ic-name">{i['name']}</span>
-      <span class="ic-val">{q['p']:,.2f}</span>
-      <span class="ic-chg {cls}">{arr} {abs(q['pct']):.2f}%</span>
+    arr, _ = ud(q["pct"]); cls = sc(q["pct"])
+    chips += f"""<div class="ic">
+      <span class="ic-n">{i['name']}</span>
+      <span class="ic-v">{q['p']:,.2f}</span>
+      <span class="ic-c {cls}">{arr} {abs(q['pct']):.2f}%</span>
     </div>"""
-now_str = datetime.now().strftime("%d %b %Y  %H:%M IST")
+
 st.markdown(f"""<div class="topbar">
-  <span class="t-logo"><span class="t-logo-dot">◈</span> DALAL</span>
+  <span class="t-logo"><span class="t-dot">◈</span> DALAL</span>
   {chips}
-  <div class="t-right">
+  <div class="t-r">
     <span class="t-time">{now_str}</span>
     <span class="t-live">● LIVE</span>
   </div>
 </div>""", unsafe_allow_html=True)
 
-# ── THREE COLUMNS ─────────────────────────────────────────────────────────────
-L, C, R = st.columns([2.1, 6.4, 2.5])
+# ── COLUMNS ───────────────────────────────────────────────────────────────────
+L, C, R = st.columns([2.1, 6.5, 2.4])
 
-# ════════════════════════════ LEFT ════════════════════════════════════════════
+# ══════════════════════════════════ LEFT ══════════════════════════════════════
 with L:
-    st.markdown('<div class="left-panel">', unsafe_allow_html=True)
-
-    # Search
-    st.markdown('<div class="psh">Search & Add</div>', unsafe_allow_html=True)
-    raw_q = st.text_input("", placeholder="Search by name or ticker…",
+    # ── Search ──
+    st.markdown('<div class="sh">Search &amp; Add</div>', unsafe_allow_html=True)
+    raw_q = st.text_input("", placeholder="Search name or ticker (e.g. SBIN)…",
                           key="sq", label_visibility="collapsed")
-    hits  = search(raw_q) if raw_q else []
+    hits  = do_search(raw_q) if raw_q else []
     if hits:
-        st.markdown('<div class="sr-dropdown">', unsafe_allow_html=True)
+        st.markdown('<div class="sr-drop">', unsafe_allow_html=True)
         for h in hits:
-            ca, cb = st.columns([5,1])
+            ca, cb = st.columns([5, 1])
             with ca:
-                st.markdown(f"""<div class="sr-item">
-                  <div><div class="sr-sym">{h['sym']}</div>
-                  <div class="sr-nm">{h['name']}</div></div>
+                st.markdown(f"""<div class="sr-row">
+                  <div class="sr-sym">{h['sym']}</div>
+                  <div class="sr-nm">{h['name']}</div>
                 </div>""", unsafe_allow_html=True)
             with cb:
-                if st.button("＋", key=f"add_{h['sym']}"):
-                    e={"sym":h["sym"]+".NS","name":h["name"]}
+                if st.button("＋", key=f"a_{h['sym']}"):
+                    e = {"sym": h["sym"]+".NS", "name": h["name"]}
                     if e not in st.session_state.watchlist:
                         st.session_state.watchlist.append(e)
                     st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    with st.expander("Add by ticker directly"):
-        mt = st.text_input("", placeholder="e.g. SBIN or SBIN.NS",
-                           key="mt", label_visibility="collapsed")
+    with st.expander("Add by full ticker (e.g. SBIN.NS)"):
+        mt = st.text_input("", placeholder="e.g. SBIN or SBIN.NS", key="mt",
+                           label_visibility="collapsed")
         if st.button("Add to Watchlist", key="btn_mt"):
             if mt.strip():
                 sym  = to_sym(mt)
                 base = mt.strip().upper().replace(".NS","").replace(".BO","")
                 nm   = NSE_STOCKS.get(base, base)
-                e    = {"sym":sym,"name":nm}
+                e    = {"sym": sym, "name": nm}
                 if e not in st.session_state.watchlist:
                     st.session_state.watchlist.append(e)
                 st.rerun()
 
-    # Watchlist
-    st.markdown('<div class="psh">Watchlist</div>', unsafe_allow_html=True)
+    # ── Watchlist ──
+    st.markdown('<div class="sh">Watchlist</div>', unsafe_allow_html=True)
     to_del = None
     for i, w in enumerate(st.session_state.watchlist):
         q    = qget(w["sym"])
         base = w["sym"].replace(".NS","").replace(".BO","")
-        arr, col = ud(q["pct"])
+        arr, _ = ud(q["pct"]); cls = sc(q["pct"])
         ps   = f"₹{q['p']:,.2f}" if q["p"] else "—"
         pcs  = f"{arr}{abs(q['pct']):.2f}%"
         is_s = w["sym"] == st.session_state.sel
-        cls  = sc(q["pct"])
-        c1, c2 = st.columns([5,1])
-        with c1:
+        sel_cls = "wl-outer wl-sel" if is_s else "wl-outer"
+
+        st.markdown(f"""<div class="{sel_cls}">
+          <div class="wl-info">
+            <div class="wl-sym">{base}</div>
+            <div class="wl-meta">
+              <span class="wl-price">{ps}</span>
+              <span class="wl-pct {cls}">{pcs}</span>
+            </div>
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+        # invisible buttons for click and delete
+        bc, bd = st.columns([5, 1])
+        with bc:
             tp = "primary" if is_s else "secondary"
-            if st.button(f"{base}  {ps}  {pcs}", key=f"ws_{i}", type=tp):
+            if st.button(base, key=f"ws_{i}", type=tp):
                 st.session_state.sel      = w["sym"]
                 st.session_state.sel_name = w["name"]
                 st.rerun()
-        with c2:
+        with bd:
             if st.button("✕", key=f"wd_{i}"):
                 to_del = i
+
     if to_del is not None:
         st.session_state.watchlist.pop(to_del)
-        syms=[w["sym"] for w in st.session_state.watchlist]
+        syms = [w["sym"] for w in st.session_state.watchlist]
         if st.session_state.sel not in syms and syms:
             st.session_state.sel      = st.session_state.watchlist[0]["sym"]
             st.session_state.sel_name = st.session_state.watchlist[0]["name"]
         st.rerun()
 
-    # News
-    st.markdown('<div class="psh">News</div>', unsafe_allow_html=True)
-    nk = st.text_input("", type="password",
-                       placeholder="NewsAPI key (newsapi.org)…",
+    # ── News ──
+    st.markdown('<div class="sh" style="margin-top:4px">News</div>', unsafe_allow_html=True)
+    nk = st.text_input("", type="password", placeholder="NewsAPI key (newsapi.org)…",
                        key="nk_inp", label_visibility="collapsed")
     if nk: st.session_state.nkey = nk
+
     arts = news_get(st.session_state.nkey, f"India NSE BSE {st.session_state.sel_name}")
     if arts:
         for a in arts[:12]:
             src = (a.get("source",{}).get("name",""))[:22]
-            ttl = (a.get("title",""))[:72]
+            ttl = (a.get("title",""))[:75]
             url = a.get("url","#")
-            st.markdown(f"""<div class="news-item" onclick="window.open('{url}','_blank')">
-              <div class="ni-src">{src}</div>
-              <div class="ni-title">{ttl}</div>
-              <div class="ni-time">{tago(a.get('publishedAt',''))}</div>
+            st.markdown(f"""<div class="ni" onclick="window.open('{url}','_blank')">
+              <div class="ni-s">{src}</div>
+              <div class="ni-t">{ttl}</div>
+              <div class="ni-d">{tago(a.get('publishedAt',''))}</div>
             </div>""", unsafe_allow_html=True)
     else:
-        st.markdown('<div style="padding:12px 14px;font-size:0.68rem;color:#94a3b8">Enter NewsAPI key above for live news.</div>', unsafe_allow_html=True)
+        st.markdown('<div style="padding:12px 14px;font-size:0.65rem;color:#94a3b8">Enter NewsAPI key above for live news.</div>', unsafe_allow_html=True)
 
-    st.markdown('</div>', unsafe_allow_html=True)
 
-# ════════════════════════════ CENTER ══════════════════════════════════════════
+# ══════════════════════════════════ CENTER ════════════════════════════════════
 with C:
     q    = qget(st.session_state.sel)
     info = iget(st.session_state.sel)
     arr, col = ud(q["pct"])
-    p   = q["p"];  ch  = q["ch"]; pct = q["pct"]
+    p   = q["p"]; ch = q["ch"]; pct = q["pct"]
     hi  = q["hi"] or info.get("dayHigh") or 0
     lo  = q["lo"] or info.get("dayLow")  or 0
     op_ = info.get("open") or info.get("regularMarketOpen") or 0
     pc  = q["pc"] or info.get("previousClose") or 0
 
-    # Banner
+    # ── Banner ──
     st.markdown(f"""<div class="banner">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
         <div>
           <div class="bn-name">{st.session_state.sel_name}</div>
           <div class="bn-sub">{st.session_state.sel} · NSE/BSE</div>
-          <div class="ohlc-row">
-            <div class="ohlc-tag"><span class="ol">O</span><span class="ov">{'₹'+f'{op_:,.2f}' if op_ else '—'}</span></div>
-            <div class="ohlc-tag"><span class="ol">H</span><span class="ov-g">{'₹'+f'{hi:,.2f}' if hi else '—'}</span></div>
-            <div class="ohlc-tag"><span class="ol">L</span><span class="ov-r">{'₹'+f'{lo:,.2f}' if lo else '—'}</span></div>
-            <div class="ohlc-tag"><span class="ol">PC</span><span class="ov">{'₹'+f'{pc:,.2f}' if pc else '—'}</span></div>
+          <div class="orow">
+            <div class="otag"><span class="ol">O</span><span class="ov">{'₹'+f'{op_:,.2f}' if op_ else '—'}</span></div>
+            <div class="otag"><span class="ol">H</span><span class="ov-g">{'₹'+f'{hi:,.2f}' if hi else '—'}</span></div>
+            <div class="otag"><span class="ol">L</span><span class="ov-r">{'₹'+f'{lo:,.2f}' if lo else '—'}</span></div>
+            <div class="otag"><span class="ol">PC</span><span class="ov">{'₹'+f'{pc:,.2f}' if pc else '—'}</span></div>
           </div>
         </div>
         <div>
@@ -612,19 +652,19 @@ with C:
       </div>
     </div>""", unsafe_allow_html=True)
 
-    # Period + chart type buttons
-    all_btns = list(PERIODS.keys()) + ["Line","Candle","Area"]
-    pcols    = st.columns(len(all_btns))
-    for i,lbl in enumerate(PERIODS.keys()):
-        tp="primary" if st.session_state.period==lbl else "secondary"
+    # ── Period + chart type ──
+    btns = list(PERIODS.keys()) + ["Line","Candle","Area"]
+    pcols = st.columns(len(btns))
+    for i, lbl in enumerate(PERIODS.keys()):
+        tp = "primary" if st.session_state.period == lbl else "secondary"
         if pcols[i].button(lbl, key=f"pb_{lbl}", type=tp):
-            st.session_state.period=lbl; st.rerun()
-    for j,ct in enumerate(["Line","Candle","Area"]):
-        tp="primary" if st.session_state.ctype==ct else "secondary"
+            st.session_state.period = lbl; st.rerun()
+    for j, ct in enumerate(["Line","Candle","Area"]):
+        tp = "primary" if st.session_state.ctype == ct else "secondary"
         if pcols[len(PERIODS)+j].button(ct, key=f"cb_{ct}", type=tp):
-            st.session_state.ctype=ct; st.rerun()
+            st.session_state.ctype = ct; st.rerun()
 
-    # Chart
+    # ── Chart ──
     pr, iv = PERIODS[st.session_state.period]
     df     = hget(st.session_state.sel, pr, iv)
     is_pos = pct >= 0
@@ -632,14 +672,18 @@ with C:
     lc = GRN if is_pos else RED
     fa = "rgba(22,163,74,0.07)" if is_pos else "rgba(220,38,38,0.07)"
 
+    st.markdown('<div class="chart-wrap">', unsafe_allow_html=True)
     if not df.empty and "Close" in df.columns:
         has_ohlc = all(c in df.columns for c in ["Open","High","Low","Close"])
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                            row_heights=[0.73,0.27], vertical_spacing=0.015)
+        has_vol  = "Volume" in df.columns
+
+        fig = make_subplots(
+            rows=2, cols=1, shared_xaxes=True,
+            row_heights=[0.74, 0.26], vertical_spacing=0.02,
+        )
 
         ct = st.session_state.ctype
-        if ct=="Candle" and has_ohlc:
-            # ── FIX: use line_color only, no fillcolor in dicts ──
+        if ct == "Candle" and has_ohlc:
             fig.add_trace(go.Candlestick(
                 x=df.index,
                 open=df["Open"], high=df["High"],
@@ -648,7 +692,7 @@ with C:
                 decreasing_line_color=RED,
                 name="OHLC", showlegend=False,
             ), row=1, col=1)
-        elif ct=="Area":
+        elif ct == "Area":
             fig.add_trace(go.Scatter(
                 x=df.index, y=df["Close"], mode="lines",
                 line=dict(color=lc, width=1.5),
@@ -662,98 +706,109 @@ with C:
                 name="Price", showlegend=False,
             ), row=1, col=1)
 
-        # MA overlays
-        if len(df)>=20:
+        # MAs
+        close_f = df["Close"].astype(float)
+        if len(df) >= 20:
             fig.add_trace(go.Scatter(
-                x=df.index, y=df["Close"].rolling(20).mean(),
-                mode="lines", line=dict(color="#f59e0b",width=1.2,dash="dot"),
-                name="MA20", opacity=0.9), row=1, col=1)
-        if len(df)>=50:
+                x=df.index, y=close_f.rolling(20).mean(),
+                mode="lines", line=dict(color="#f59e0b", width=1.2, dash="dot"),
+                name="MA20", opacity=0.9,
+            ), row=1, col=1)
+        if len(df) >= 50:
             fig.add_trace(go.Scatter(
-                x=df.index, y=df["Close"].rolling(50).mean(),
-                mode="lines", line=dict(color="#6366f1",width=1.2,dash="dot"),
-                name="MA50", opacity=0.9), row=1, col=1)
+                x=df.index, y=close_f.rolling(50).mean(),
+                mode="lines", line=dict(color="#6366f1", width=1.2, dash="dot"),
+                name="MA50", opacity=0.9,
+            ), row=1, col=1)
 
         # Volume
-        if "Volume" in df.columns:
-            vc = [GRN if (c>=o) else RED
-                  for c,o in zip(df["Close"], df.get("Open", df["Close"]))]
+        if has_vol:
+            o_col = df.get("Open", df["Close"])
+            vc = [GRN if float(c) >= float(o) else RED
+                  for c, o in zip(df["Close"], o_col)]
             fig.add_trace(go.Bar(
                 x=df.index, y=df["Volume"],
                 marker_color=vc, opacity=0.5,
-                name="Vol", showlegend=False), row=2, col=1)
+                name="Vol", showlegend=False,
+            ), row=2, col=1)
 
-        ax = dict(showgrid=False,zeroline=False,color="#94a3b8",
-                  tickfont=dict(family="JetBrains Mono",size=10,color="#94a3b8"),
-                  linecolor="#e2e8f0")
-        yax= dict(showgrid=True,gridcolor="#f1f5f9",zeroline=False,
-                  side="right",color="#94a3b8",
-                  tickfont=dict(family="JetBrains Mono",size=10,color="#94a3b8"),
-                  linecolor="#e2e8f0")
+        ax  = dict(showgrid=False, zeroline=False, color="#94a3b8",
+                   tickfont=dict(family="JetBrains Mono", size=10, color="#94a3b8"),
+                   linecolor="#e2e8f0")
+        yax = dict(showgrid=True, gridcolor="#f1f5f9", zeroline=False,
+                   side="right", color="#94a3b8",
+                   tickfont=dict(family="JetBrains Mono", size=10, color="#94a3b8"))
+
         fig.update_layout(
             paper_bgcolor="rgba(255,255,255,0)",
             plot_bgcolor="rgba(255,255,255,0)",
-            margin=dict(l=0,r=4,t=4,b=0), height=320,
+            margin=dict(l=0, r=4, t=4, b=0),
+            height=330,
             showlegend=True,
-            legend=dict(orientation="h",y=1.05,x=0,
-                        font=dict(family="JetBrains Mono",size=10,color="#94a3b8"),
-                        bgcolor="rgba(0,0,0,0)"),
+            legend=dict(
+                orientation="h", y=1.05, x=0,
+                font=dict(family="JetBrains Mono", size=10, color="#94a3b8"),
+                bgcolor="rgba(0,0,0,0)",
+            ),
             hovermode="x unified",
-            hoverlabel=dict(bgcolor="#fff",bordercolor="#e2e8f0",
-                            font=dict(family="JetBrains Mono",size=11,color="#1e293b")),
-            xaxis=dict(**ax), xaxis2=dict(**ax,rangeslider=dict(visible=False)),
-            yaxis=dict(**yax), yaxis2=dict(showgrid=False,showticklabels=False),
+            hoverlabel=dict(
+                bgcolor="#fff", bordercolor="#e2e8f0",
+                font=dict(family="JetBrains Mono", size=11, color="#1e293b"),
+            ),
+            xaxis=dict(**ax),
+            xaxis2=dict(**ax, rangeslider=dict(visible=False)),
+            yaxis=dict(**yax),
+            yaxis2=dict(showgrid=False, showticklabels=False),
         )
         st.plotly_chart(fig, use_container_width=True,
-                        config={"displayModeBar":False})
+                        config={"displayModeBar": False})
     else:
-        st.markdown('<div style="height:260px;display:flex;align-items:center;justify-content:center;background:#fff;border:1px solid #e2e8f0;border-radius:8px;color:#94a3b8;font-size:0.75rem">No chart data available</div>', unsafe_allow_html=True)
+        st.markdown('<div style="height:260px;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:0.75rem">No chart data available</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Center tabs ──
-    ctabs=["Overview","Fundamentals","Financials","Sectors"]
-    tc=st.columns(len(ctabs))
-    for i,t in enumerate(ctabs):
-        tp="primary" if st.session_state.ctab==t else "secondary"
+    ctabs = ["Overview","Fundamentals","Financials","Sectors"]
+    tc    = st.columns(len(ctabs))
+    for i, t in enumerate(ctabs):
+        tp = "primary" if st.session_state.ctab == t else "secondary"
         if tc[i].button(t, key=f"ct_{t}", type=tp):
-            st.session_state.ctab=t; st.rerun()
+            st.session_state.ctab = t; st.rerun()
 
     # ── OVERVIEW ──────────────────────────────────────────────────────────────
-    if st.session_state.ctab=="Overview":
+    if st.session_state.ctab == "Overview":
         st.markdown('<div class="sct">Key Metrics</div>', unsafe_allow_html=True)
         mcap=info.get("marketCap"); wh52=info.get("fiftyTwoWeekHigh")
         wl52=info.get("fiftyTwoWeekLow"); pe_=info.get("trailingPE")
         fpe=info.get("forwardPE"); eps=info.get("trailingEps")
         dy=info.get("dividendYield"); vol=info.get("volume") or info.get("regularMarketVolume")
-        avol=info.get("averageVolume"); beta=info.get("beta")
-        ptb=info.get("priceToBook"); wk52pct=None
-        if wh52 and wl52 and p:
-            wk52pct=round((p-wl52)/(wh52-wl52)*100,1) if wh52!=wl52 else None
+        avol=info.get("averageVolume"); beta=info.get("beta"); ptb=info.get("priceToBook")
+        wk52pct = round((p-wl52)/(wh52-wl52)*100,1) if (wh52 and wl52 and p and wh52!=wl52) else None
 
-        metrics=[
-            ("Market Cap",  finr(mcap),  ""),
-            ("52W High",    sv(wh52),     "pos" if p and wh52 and p>=wh52*0.95 else ""),
-            ("52W Low",     sv(wl52),     "neg" if p and wl52 and p<=wl52*1.05 else ""),
-            ("52W Range",   f"{wk52pct:.0f}%" if wk52pct else "—",""),
-            ("P/E (TTM)",   sv(pe_,"",dec=1),""),
-            ("Fwd P/E",     sv(fpe,"",dec=1),""),
-            ("EPS (TTM)",   sv(eps),       ""),
-            ("Div Yield",   sv(dy,fmt="pct"),"pos" if dy and dy>0 else ""),
-            ("Volume",      sv(vol,fmt="vol"),""),
-            ("Avg Volume",  sv(avol,fmt="vol"),""),
-            ("Beta",        sv(beta,"",dec=2),""),
-            ("Price/Book",  sv(ptb,"",dec=2),""),
+        metrics = [
+            ("Market Cap",  finr(mcap),           ""),
+            ("52W High",    sv(wh52),              "pos" if p and wh52 and p>=wh52*0.95 else ""),
+            ("52W Low",     sv(wl52),              "neg" if p and wl52 and p<=wl52*1.05 else ""),
+            ("52W Range",   f"{wk52pct:.0f}%" if wk52pct is not None else "—", ""),
+            ("P/E (TTM)",   sv(pe_,"",dec=1),      ""),
+            ("Fwd P/E",     sv(fpe,"",dec=1),      ""),
+            ("EPS (TTM)",   sv(eps),               ""),
+            ("Div Yield",   sv(dy,fmt="pct"),       "pos" if dy and float(dy)>0 else ""),
+            ("Volume",      sv(vol,fmt="vol"),      ""),
+            ("Avg Volume",  sv(avol,fmt="vol"),     ""),
+            ("Beta",        sv(beta,"",dec=2),      ""),
+            ("Price/Book",  sv(ptb,"",dec=2),       ""),
         ]
-        mc4=st.columns(4)
-        for idx_,(lbl,val,vc) in enumerate(metrics):
-            with mc4[idx_%4]:
-                mvc=f"mc-val {vc}".strip()
+        mc4 = st.columns(4)
+        for idx_, (lbl, val, vc) in enumerate(metrics):
+            mvc = f"mc-v {vc}".strip()
+            with mc4[idx_ % 4]:
                 st.markdown(f"""<div class="mc">
-                  <div class="mc-lbl">{lbl}</div>
+                  <div class="mc-l">{lbl}</div>
                   <div class="{mvc}">{val}</div>
                 </div>""", unsafe_allow_html=True)
 
     # ── FUNDAMENTALS ──────────────────────────────────────────────────────────
-    elif st.session_state.ctab=="Fundamentals":
+    elif st.session_state.ctab == "Fundamentals":
         roe=info.get("returnOnEquity"); roa=info.get("returnOnAssets")
         gm=info.get("grossMargins"); om=info.get("operatingMargins")
         pm=info.get("profitMargins"); d2e=info.get("debtToEquity")
@@ -773,68 +828,67 @@ with C:
                 ("EBITDA",           finr(ebit)),
                 ("Net Income",       finr(ni)),
                 ("Free Cash Flow",   finr(fcf)),
-                ("Gross Margin",     sv(gm,fmt="pct")),
-                ("Operating Margin", sv(om,fmt="pct")),
-                ("Net Margin",       sv(pm,fmt="pct")),
+                ("Gross Margin",     sv(gm, fmt="pct")),
+                ("Operating Margin", sv(om, fmt="pct")),
+                ("Net Margin",       sv(pm, fmt="pct")),
                 ("ROE",              sv(roe,fmt="pct")),
                 ("ROA",              sv(roa,fmt="pct")),
                 ("EV/Revenue",       sv(evr,"",dec=2)),
                 ("EV/EBITDA",        sv(eve,"",dec=2)),
-                ("Rev Growth YoY",   sv(rg,fmt="pct")),
-                ("Earn Growth YoY",  sv(eg,fmt="pct")),
+                ("Rev Growth YoY",   sv(rg, fmt="pct")),
+                ("Earn Growth YoY",  sv(eg, fmt="pct")),
                 ("Earn Growth QoQ",  sv(qeg,fmt="pct")),
             ]
-            st.markdown('<table class="ft">',unsafe_allow_html=True)
-            for lbl,val in rows1:
-                st.markdown(f'<tr><td class="fl">{lbl}</td><td class="fv">{val}</td></tr>',unsafe_allow_html=True)
-            st.markdown('</table>',unsafe_allow_html=True)
+            st.markdown('<table class="ft">', unsafe_allow_html=True)
+            for lbl, val in rows1:
+                st.markdown(f'<tr><td class="fl">{lbl}</td><td class="fv">{val}</td></tr>', unsafe_allow_html=True)
+            st.markdown('</table>', unsafe_allow_html=True)
+
         with fb2:
             st.markdown('<div class="sct">Balance Sheet</div>', unsafe_allow_html=True)
-            nd_="—"
-            if td and tc_:
-                nd_=finr(float(td)-float(tc_))
+            nd_ = finr(float(td)-float(tc_)) if (td and tc_) else "—"
             rows2=[
-                ("Total Debt",       finr(td)),
-                ("Total Cash",       finr(tc_)),
-                ("Net Debt",         nd_),
-                ("Debt/Equity",      sv(d2e,"",dec=2)),
-                ("Current Ratio",    sv(cr,"",dec=2)),
-                ("Book Value/Share", sv(bv,dec=2)),
+                ("Total Debt",        finr(td)),
+                ("Total Cash",        finr(tc_)),
+                ("Net Debt",          nd_),
+                ("Debt/Equity",       sv(d2e,"",dec=2)),
+                ("Current Ratio",     sv(cr,"",dec=2)),
+                ("Book Value/Share",  sv(bv, dec=2)),
                 ("Shares Outstanding",sv(shr,fmt="vol")),
-                ("Float Shares",     sv(info.get("floatShares"),fmt="vol")),
+                ("Float Shares",      sv(info.get("floatShares"),fmt="vol")),
             ]
-            st.markdown('<table class="ft">',unsafe_allow_html=True)
-            for lbl,val in rows2:
-                st.markdown(f'<tr><td class="fl">{lbl}</td><td class="fv">{val}</td></tr>',unsafe_allow_html=True)
-            st.markdown('</table>',unsafe_allow_html=True)
+            st.markdown('<table class="ft">', unsafe_allow_html=True)
+            for lbl, val in rows2:
+                st.markdown(f'<tr><td class="fl">{lbl}</td><td class="fv">{val}</td></tr>', unsafe_allow_html=True)
+            st.markdown('</table>', unsafe_allow_html=True)
 
-            st.markdown('<div class="sct" style="margin-top:10px">Company Info</div>',unsafe_allow_html=True)
-            ci=[
+            st.markdown('<div class="sct" style="margin-top:10px">Company</div>', unsafe_allow_html=True)
+            ci = [
                 ("Sector",   info.get("sector","—")),
                 ("Industry", info.get("industry","—")),
                 ("Exchange", info.get("exchange","—")),
                 ("Country",  info.get("country","India")),
             ]
-            st.markdown('<table class="ft">',unsafe_allow_html=True)
-            for lbl,val in ci:
-                st.markdown(f'<tr><td class="fl">{lbl}</td><td class="fv">{val}</td></tr>',unsafe_allow_html=True)
-            st.markdown('</table>',unsafe_allow_html=True)
+            st.markdown('<table class="ft">', unsafe_allow_html=True)
+            for lbl, val in ci:
+                st.markdown(f'<tr><td class="fl">{lbl}</td><td class="fv">{val}</td></tr>', unsafe_allow_html=True)
+            st.markdown('</table>', unsafe_allow_html=True)
 
-        summary=info.get("longBusinessSummary","")
+        summary = info.get("longBusinessSummary","")
         if summary:
-            st.markdown(f'<div style="font-size:0.7rem;color:#64748b;line-height:1.65;margin-top:10px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px">{summary[:700]}…</div>',unsafe_allow_html=True)
+            st.markdown(f'<div style="font-size:0.68rem;color:#64748b;line-height:1.65;margin-top:10px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px">{summary[:700]}…</div>', unsafe_allow_html=True)
 
     # ── FINANCIALS ────────────────────────────────────────────────────────────
-    elif st.session_state.ctab=="Financials":
-        fin,bs,cf=fget(st.session_state.sel)
-        def render_fin(df_in,label):
+    elif st.session_state.ctab == "Financials":
+        fin, bs, cf = fget(st.session_state.sel)
+        def render_fin(df_in, label):
             if df_in is None or df_in.empty:
-                st.markdown(f'<div style="padding:10px;color:#94a3b8;font-size:0.68rem">{label}: not available</div>',unsafe_allow_html=True)
+                st.markdown(f'<div style="padding:10px;color:#94a3b8;font-size:0.65rem">{label}: not available</div>', unsafe_allow_html=True)
                 return
-            st.markdown(f'<div class="sct">{label}</div>',unsafe_allow_html=True)
-            d=df_in.head(10).copy()
-            d.index=[str(x)[:40] for x in d.index]
-            d.columns=[str(c)[:12] for c in d.columns]
+            st.markdown(f'<div class="sct">{label}</div>', unsafe_allow_html=True)
+            d = df_in.head(10).copy()
+            d.index   = [str(x)[:40] for x in d.index]
+            d.columns = [str(c)[:12] for c in d.columns]
             def fc(x):
                 try:
                     f=float(x)
@@ -842,169 +896,167 @@ with C:
                     if abs(f)>=1e5: return f"₹{f/1e5:.1f}L"
                     return f"₹{f:,.0f}"
                 except: return "—"
-            st.dataframe(d.map(fc),use_container_width=True)
-        render_fin(fin,"Income Statement (Annual)")
-        render_fin(bs,"Balance Sheet (Annual)")
-        render_fin(cf,"Cash Flow (Annual)")
+            st.dataframe(d.map(fc), use_container_width=True)
+        render_fin(fin, "Income Statement (Annual)")
+        render_fin(bs,  "Balance Sheet (Annual)")
+        render_fin(cf,  "Cash Flow (Annual)")
 
     # ── SECTORS ───────────────────────────────────────────────────────────────
-    elif st.session_state.ctab=="Sectors":
-        st.markdown('<div class="sct">Sector Performance Today</div>',unsafe_allow_html=True)
-        sc4=st.columns(4)
-        for i,s in enumerate(SECTORS):
-            qs=qget(s["sym"]); arr_s,col_s=ud(qs["pct"]); cls_s=sc(qs["pct"])
-            with sc4[i%4]:
-                st.markdown(f"""<div class="sec-tile">
+    elif st.session_state.ctab == "Sectors":
+        st.markdown('<div class="sct">Sector Performance Today</div>', unsafe_allow_html=True)
+        sc4 = st.columns(4)
+        for i, s in enumerate(SECTORS):
+            qs = qget(s["sym"]); arr_s, _ = ud(qs["pct"]); cls_s = sc(qs["pct"])
+            with sc4[i % 4]:
+                st.markdown(f"""<div class="sec-t">
                   <div class="sec-n">{s['name']}</div>
                   <div class="sec-p {cls_s}">{arr_s} {abs(qs['pct']):.2f}%</div>
-                </div>""",unsafe_allow_html=True)
+                </div>""", unsafe_allow_html=True)
 
-        st.markdown('<div class="sct" style="margin-top:14px">1-Month Normalised Return (%)</div>',unsafe_allow_html=True)
-        sfig=go.Figure()
-        pal=["#16a34a","#2563eb","#d97706","#9333ea","#dc2626","#0891b2","#f97316","#65a30d"]
-        for si,s in enumerate(SECTORS):
-            sdf=hget(s["sym"],"1mo","1d")
-            if not sdf.empty and "Close" in sdf.columns and len(sdf)>1:
-                base=float(sdf["Close"].iloc[0])
-                norm=(sdf["Close"].astype(float)/base-1)*100
+        st.markdown('<div class="sct" style="margin-top:14px">1-Month Normalised Return (%)</div>', unsafe_allow_html=True)
+        sfig = go.Figure()
+        pal  = ["#16a34a","#2563eb","#d97706","#9333ea","#dc2626","#0891b2","#f97316","#65a30d"]
+        for si, s in enumerate(SECTORS):
+            sdf = hget(s["sym"], "1mo", "1d")
+            if not sdf.empty and "Close" in sdf.columns and len(sdf) > 1:
+                base = float(sdf["Close"].iloc[0])
+                norm = (sdf["Close"].astype(float) / base - 1) * 100
                 sfig.add_trace(go.Scatter(
-                    x=sdf.index,y=norm.round(2),mode="lines",
-                    name=s["name"],line=dict(color=pal[si],width=1.5)))
+                    x=sdf.index, y=norm.round(2), mode="lines",
+                    name=s["name"], line=dict(color=pal[si], width=1.5)))
         sfig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
-            margin=dict(l=0,r=4,t=4,b=0),height=230,
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=0,r=4,t=4,b=0), height=230,
             hovermode="x unified",
-            legend=dict(orientation="h",y=1.1,
+            legend=dict(orientation="h", y=1.1,
                         font=dict(family="JetBrains Mono",size=10,color="#64748b"),
                         bgcolor="rgba(0,0,0,0)"),
-            xaxis=dict(showgrid=False,zeroline=False,color="#94a3b8",
+            xaxis=dict(showgrid=False, zeroline=False, color="#94a3b8",
                        tickfont=dict(family="JetBrains Mono",size=10,color="#94a3b8")),
-            yaxis=dict(showgrid=True,gridcolor="#f1f5f9",zeroline=True,
-                       zerolinecolor="#e2e8f0",side="right",ticksuffix="%",
+            yaxis=dict(showgrid=True, gridcolor="#f1f5f9", zeroline=True,
+                       zerolinecolor="#e2e8f0", side="right", ticksuffix="%",
                        tickfont=dict(family="JetBrains Mono",size=10,color="#94a3b8")),
-            hoverlabel=dict(bgcolor="#fff",bordercolor="#e2e8f0",
+            hoverlabel=dict(bgcolor="#fff", bordercolor="#e2e8f0",
                             font=dict(family="JetBrains Mono",size=11,color="#1e293b")),
         )
-        st.plotly_chart(sfig,use_container_width=True,config={"displayModeBar":False})
+        st.plotly_chart(sfig, use_container_width=True, config={"displayModeBar":False})
 
-# ════════════════════════════ RIGHT ═══════════════════════════════════════════
+
+# ══════════════════════════════════ RIGHT ═════════════════════════════════════
 with R:
-    st.markdown('<div class="right-panel">', unsafe_allow_html=True)
+    RTABS = ["Gainers","Losers","Indices","Commodities","MCX"]
+    rtc   = st.columns(len(RTABS))
+    for i, t in enumerate(RTABS):
+        tp = "primary" if st.session_state.rtab == t else "secondary"
+        if rtc[i].button(t, key=f"rt_{t}", type=tp):
+            st.session_state.rtab = t; st.rerun()
 
-    RTABS=["Gainers","Losers","Indices","Commodities","MCX"]
-    rtc=st.columns(len(RTABS))
-    for i,t in enumerate(RTABS):
-        tp="primary" if st.session_state.rtab==t else "secondary"
-        if rtc[i].button(t,key=f"rt_{t}",type=tp):
-            st.session_state.rtab=t; st.rerun()
-
-    tab=st.session_state.rtab
+    tab = st.session_state.rtab
 
     if tab in ("Gainers","Losers"):
-        rows=[]
+        rows = []
         for sym in NIFTY50:
-            qr=qget(sym); base=sym.replace(".NS","")
-            rows.append({"sym":base,"full":sym,"name":NSE_STOCKS.get(base,base),
+            qr   = qget(sym); base = sym.replace(".NS","")
+            rows.append({"sym":base,"full":sym,
+                         "name":NSE_STOCKS.get(base,base),
                          "p":qr["p"],"pct":qr["pct"]})
-        rows.sort(key=lambda x:x["pct"],reverse=(tab=="Gainers"))
-        for r in rows[:18]:
-            arr_r,col_r=ud(r["pct"]); cls_r=sc(r["pct"])
-            ps=f"₹{r['p']:,.2f}" if r["p"] else "—"
-            is_sel=r["full"]==st.session_state.sel
-            st.markdown(f"""<div class="rr {'sel' if is_sel else ''}"
-              onclick="">
+        rows.sort(key=lambda x: x["pct"], reverse=(tab=="Gainers"))
+        for r in rows[:20]:
+            arr_r, _ = ud(r["pct"]); cls_r = sc(r["pct"])
+            ps  = f"₹{r['p']:,.2f}" if r["p"] else "—"
+            sel = "rr rr-sel" if r["full"] == st.session_state.sel else "rr"
+            st.markdown(f"""<div class="{sel}">
               <div>
                 <div class="rr-sym">{r['sym']}</div>
-                <div class="rr-name">{r['name'][:24]}</div>
+                <div class="rr-nm">{r['name'][:22]}</div>
               </div>
               <div>
-                <div class="rr-price">{ps}</div>
-                <div class="rr-chg {cls_r}">{arr_r} {abs(r['pct']):.2f}%</div>
+                <div class="rr-p">{ps}</div>
+                <div class="rr-c {cls_r}">{arr_r} {abs(r['pct']):.2f}%</div>
               </div>
-            </div>""",unsafe_allow_html=True)
-            if st.button("→", key=f"rsel_{tab}_{r['sym']}", use_container_width=True):
-                st.session_state.sel=r["full"]
-                st.session_state.sel_name=r["name"]
+            </div>""", unsafe_allow_html=True)
+            if st.button("↗", key=f"rsel_{tab}_{r['sym']}", use_container_width=True):
+                st.session_state.sel      = r["full"]
+                st.session_state.sel_name = r["name"]
                 st.rerun()
 
-    elif tab=="Indices":
-        for ix in ALL_INDICES:
-            qi=qget(ix["sym"]); arr_i,_=ud(qi["pct"]); cls_i=sc(qi["pct"])
-            ps=f"{qi['p']:,.2f}" if qi["p"] else "—"
-            is_sel=ix["sym"]==st.session_state.sel
-            st.markdown(f"""<div class="rr {'sel' if is_sel else ''}">
+    elif tab == "Indices":
+        for ix in ALL_IDX:
+            qi = qget(ix["sym"]); arr_i, _ = ud(qi["pct"]); cls_i = sc(qi["pct"])
+            ps  = f"{qi['p']:,.2f}" if qi["p"] else "—"
+            sel = "rr rr-sel" if ix["sym"] == st.session_state.sel else "rr"
+            st.markdown(f"""<div class="{sel}">
               <div><div class="rr-sym">{ix['name']}</div></div>
               <div>
-                <div class="rr-price">{ps}</div>
-                <div class="rr-chg {cls_i}">{arr_i} {abs(qi['pct']):.2f}%</div>
+                <div class="rr-p">{ps}</div>
+                <div class="rr-c {cls_i}">{arr_i} {abs(qi['pct']):.2f}%</div>
               </div>
-            </div>""",unsafe_allow_html=True)
-            if st.button("→",key=f"ri_{ix['sym']}",use_container_width=True):
-                st.session_state.sel=ix["sym"]
-                st.session_state.sel_name=ix["name"]
+            </div>""", unsafe_allow_html=True)
+            if st.button("↗", key=f"ri_{ix['sym']}", use_container_width=True):
+                st.session_state.sel      = ix["sym"]
+                st.session_state.sel_name = ix["name"]
                 st.rerun()
 
-    elif tab=="Commodities":
+    elif tab == "Commodities":
         for c in COMMODITIES:
-            qc=qget(c["sym"]); arr_c,_=ud(qc["pct"]); cls_c=sc(qc["pct"])
-            ps=f"{qc['p']:,.2f}" if qc["p"] else "—"
-            is_sel=c["sym"]==st.session_state.sel
-            st.markdown(f"""<div class="rr {'sel' if is_sel else ''}">
+            qc = qget(c["sym"]); arr_c, _ = ud(qc["pct"]); cls_c = sc(qc["pct"])
+            ps  = f"{qc['p']:,.2f}" if qc["p"] else "—"
+            sel = "rr rr-sel" if c["sym"] == st.session_state.sel else "rr"
+            st.markdown(f"""<div class="{sel}">
               <div><div class="rr-sym">{c['name']}</div></div>
               <div>
-                <div class="rr-price">{ps}</div>
-                <div class="rr-chg {cls_c}">{arr_c} {abs(qc['pct']):.2f}%</div>
+                <div class="rr-p">{ps}</div>
+                <div class="rr-c {cls_c}">{arr_c} {abs(qc['pct']):.2f}%</div>
               </div>
-            </div>""",unsafe_allow_html=True)
-            if st.button("→",key=f"rc_{c['sym']}",use_container_width=True):
-                st.session_state.sel=c["sym"]
-                st.session_state.sel_name=c["name"]
+            </div>""", unsafe_allow_html=True)
+            if st.button("↗", key=f"rc_{c['sym']}", use_container_width=True):
+                st.session_state.sel      = c["sym"]
+                st.session_state.sel_name = c["name"]
                 st.rerun()
 
-    elif tab=="MCX":
+    elif tab == "MCX":
         for m in MCX_LIST:
-            qm=qget(m["sym"]); arr_m,_=ud(qm["pct"]); cls_m=sc(qm["pct"])
-            bm=m["sym"].replace(".NS","")
-            ps=f"₹{qm['p']:,.2f}" if qm["p"] else "—"
-            is_sel=m["sym"]==st.session_state.sel
-            st.markdown(f"""<div class="rr {'sel' if is_sel else ''}">
+            qm = qget(m["sym"]); arr_m, _ = ud(qm["pct"]); cls_m = sc(qm["pct"])
+            bm  = m["sym"].replace(".NS","")
+            ps  = f"₹{qm['p']:,.2f}" if qm["p"] else "—"
+            sel = "rr rr-sel" if m["sym"] == st.session_state.sel else "rr"
+            st.markdown(f"""<div class="{sel}">
               <div>
                 <div class="rr-sym">{bm}</div>
-                <div class="rr-name">{m['name']}</div>
+                <div class="rr-nm">{m['name']}</div>
               </div>
               <div>
-                <div class="rr-price">{ps}</div>
-                <div class="rr-chg {cls_m}">{arr_m} {abs(qm['pct']):.2f}%</div>
+                <div class="rr-p">{ps}</div>
+                <div class="rr-c {cls_m}">{arr_m} {abs(qm['pct']):.2f}%</div>
               </div>
-            </div>""",unsafe_allow_html=True)
-            if st.button("→",key=f"rm_{m['sym']}",use_container_width=True):
-                st.session_state.sel=m["sym"]
-                st.session_state.sel_name=m["name"]
+            </div>""", unsafe_allow_html=True)
+            if st.button("↗", key=f"rm_{m['sym']}", use_container_width=True):
+                st.session_state.sel      = m["sym"]
+                st.session_state.sel_name = m["name"]
                 st.rerun()
 
-    # Sparkline
-    st.markdown("<hr style='border:none;border-top:1px solid #f1f5f9;margin:8px 0'>",unsafe_allow_html=True)
-    mdf=hget(st.session_state.sel,"1mo","1d")
+    # ── Mini sparkline ──
+    st.markdown("<hr style='border:none;border-top:1px solid #f1f5f9;margin:6px 0'>", unsafe_allow_html=True)
+    mdf = hget(st.session_state.sel, "1mo", "1d")
     if not mdf.empty and "Close" in mdf.columns:
-        lc_m=GRN if pct>=0 else RED
-        fa_m="rgba(22,163,74,0.1)" if pct>=0 else "rgba(220,38,38,0.1)"
-        mfig=go.Figure(go.Scatter(
-            x=mdf.index,y=mdf["Close"].astype(float),
-            mode="lines",line=dict(color=lc_m,width=1.5),
-            fill="tozeroy",fillcolor=fa_m,
+        lc_m = GRN if pct >= 0 else RED
+        fa_m = "rgba(22,163,74,0.1)" if pct >= 0 else "rgba(220,38,38,0.1)"
+        mfig = go.Figure(go.Scatter(
+            x=mdf.index, y=mdf["Close"].astype(float),
+            mode="lines", line=dict(color=lc_m, width=1.5),
+            fill="tozeroy", fillcolor=fa_m,
         ))
         mfig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
-            margin=dict(l=0,r=0,t=0,b=0),height=55,showlegend=False,
-            xaxis=dict(visible=False),yaxis=dict(visible=False),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=0,r=0,t=0,b=0), height=55,
+            showlegend=False,
+            xaxis=dict(visible=False), yaxis=dict(visible=False),
         )
-        slbl=st.session_state.sel.replace(".NS","").replace(".BO","")
-        st.markdown(f'<div style="font-size:0.58rem;color:#94a3b8;padding:3px 8px;font-family:JetBrains Mono,monospace;text-transform:uppercase;letter-spacing:0.1em">{slbl} · 1M</div>',unsafe_allow_html=True)
-        st.plotly_chart(mfig,use_container_width=True,config={"displayModeBar":False})
+        slbl = st.session_state.sel.replace(".NS","").replace(".BO","")
+        st.markdown(f'<div style="font-size:0.56rem;color:#94a3b8;padding:3px 8px;font-family:JetBrains Mono,monospace;text-transform:uppercase;letter-spacing:0.1em">{slbl} · 1M</div>', unsafe_allow_html=True)
+        st.plotly_chart(mfig, use_container_width=True, config={"displayModeBar":False})
 
-    st.markdown("<hr style='border:none;border-top:1px solid #f1f5f9;margin:8px 0'>",unsafe_allow_html=True)
-    if st.button("⟳  Refresh Data",use_container_width=True):
+    st.markdown("<hr style='border:none;border-top:1px solid #f1f5f9;margin:6px 0'>", unsafe_allow_html=True)
+    if st.button("⟳  Refresh Data", use_container_width=True):
         st.cache_data.clear(); st.rerun()
-    st.markdown('<div style="font-size:0.56rem;color:#cbd5e1;text-align:center;padding:4px;font-family:JetBrains Mono,monospace">Yahoo Finance · 2 min cache · ~15 min delay</div>',unsafe_allow_html=True)
-
-    st.markdown('</div>',unsafe_allow_html=True)
+    st.markdown('<div style="font-size:0.54rem;color:#cbd5e1;text-align:center;padding:4px;font-family:JetBrains Mono,monospace">Yahoo Finance · 2 min cache · ~15 min delay</div>', unsafe_allow_html=True)
